@@ -1365,28 +1365,13 @@ func (fc *FileCache) FlushFile(options internal.FlushFileOptions) error {
 		return syscall.EBADF
 	}
 
-	// Flush all data to disk that has been buffered by the kernel.
-	// We cannot close the incoming handle since the user called flush, note close and flush can be called on the same handle multiple times.
-	// To ensure the data is flushed to disk before writing to storage, we duplicate the handle and close that handle.
-	// f.fsync() is another option but dup+close does it quickly compared to sync
-	dupFd, err := syscall.Dup(int(f.Fd()))
-	if err != nil {
-		log.Err("FileCache::FlushFile : error [couldn't duplicate the fd] %s", options.Handle.Path)
-		return syscall.EIO
-	}
-
-	err = syscall.Close(dupFd)
-	if err != nil {
-		log.Err("FileCache::FlushFile : error [unable to close duplicate fd] %s", options.Handle.Path)
-		return syscall.EIO
-	}
-
 	// The application can keep changing the file through this handle while it is uploaded, e.g. when this flush comes
 	// from closing a dup'ed or inherited (fork) fd. Hand the dirty state over to Flushing before the snapshot is read,
-	// instead of clearing the dirty flag once the upload completes. Writers change the file before they mark the
-	// handle dirty, so a change marked before the hand-over is in the snapshot, and a change marked after it keeps the
-	// handle dirty for the next flush or close. Dirty() reports Flushing too, so a concurrent flush waits for this
-	// upload rather than returning before the data is in storage.
+	// instead of clearing the dirty flag once the upload completes. The snapshot is read through the page cache, so it
+	// sees every completed write without an fsync. Writers change the file before they mark the handle dirty, so a
+	// change marked before the hand-over is in the snapshot, and a change marked after it keeps the handle dirty for
+	// the next flush or close. Dirty() reports Flushing too, so a concurrent flush waits for this upload rather than
+	// returning before the data is in storage.
 	options.Handle.Flags.Set(handlemap.HandleFlagFlushing)
 	options.Handle.Flags.Clear(handlemap.HandleFlagDirty)
 	uploaded := false
